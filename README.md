@@ -4,7 +4,8 @@
 
 一个 DeepSeek Harness UI 插件：把「深度求索中，用时 xx 秒」那一行里的小图标换成会动的样式，并可在「设置 → 通用」里随时换样式、调大小。支持导入文件自定义。
 
-![](file:///E:/ProjectGit/dsh-source/spinner-custom-plugin/preview.png)
+<img width="872" height="481" alt="preview" src="https://github.com/user-attachments/assets/a43c203c-d82c-48a8-8e5f-3f68fe961873" />
+
 
 - **8 个内置样式**：拖尾环、十字、圆环、点阵、折纸、圆角、发条，外加一个方块⇄圆的动画 ，设置里一键切换
 - **换成你自己的动画**：丢一张动画 SVG 或 APNG 进 `asset/`，跑一条命令；也能从视频转
