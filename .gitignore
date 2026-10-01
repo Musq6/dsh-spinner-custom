@@ -1,0 +1,47 @@
+# ---------------------------------------------------------------------------
+# Artwork you do not have the right to redistribute goes in asset/local/.
+#
+# The rule this file is really enforcing: a repository should contain exactly
+# the pixels it is allowed to publish, and nothing else. asset/ is for artwork
+# that may be redistributed; asset/local/ is for the rest -- the clip you are
+# developing against, a client's logo, a purchase you cannot share.
+#
+# It is a convenience, not a guarantee. tools/embed-asset.mjs copies artwork
+# into client.js, and there is no .gitignore pattern that can hide a copy living
+# inside a tracked file. That is why inlining from asset/local/ prints a warning
+# and why `--clear` exists:
+#
+#     node tools/embed-asset.mjs --clear
+# ---------------------------------------------------------------------------
+asset/local/
+
+# Generated pages. Both carry a copy of the artwork -- preview.html embeds the
+# same inlined payload, preview.png is that artwork rendered -- so committing
+# them would mean committing the pixels twice more, in two more places that
+# would each have to be re-checked when the artwork changes.
+#
+#     node tools/build-preview.mjs
+preview.html
+preview.png
+
+# Scratch from tools/verify-chromium.mjs. Removed on exit, but a killed run
+# leaves them behind and they should never reach the index.
+.verify-profile/
+.verify-blank.html
+
+# Written by tools/check-embed.mjs, which restores client.js in a finally block.
+# Only present if that run was interrupted.
+client.js.check-embed-backup
+
+# Raw frame dumps from the asset pipelines: the `.frames-*.raw` temp file that
+# tools/build-*.sh create, and frames.raw from the README recipe.
+.frames-*.raw
+frames.raw
+
+# Screenshots from experimenting.
+shot*.png
+
+node_modules/
+
+#And...
+MAINTAINING.md

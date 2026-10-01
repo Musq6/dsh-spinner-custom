@@ -1,0 +1,31 @@
+{
+  "name": "@local/spinner-custom",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Replace the running-status icon in the Harness Web UI, with a Settings -> General row for its size.",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-chat"
+      ]
+    }
+  }
+}

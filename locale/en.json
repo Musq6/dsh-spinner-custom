@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Custom running icon",
+    "description": "Replaces the icon in the running-status row and adds a Settings -> General row where its size can be changed any time after install."
+  }
+}

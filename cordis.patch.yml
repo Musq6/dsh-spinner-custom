@@ -1,0 +1,5 @@
+# Inserts this bundle into the profile's Loader tree.
+# The Host half is a no-op; the whole change lives in the browser half (./client).
+- insert:
+    - id: spinner-custom
+      name: '@local/spinner-custom'
