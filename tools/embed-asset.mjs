@@ -40,6 +40,7 @@ import { readFile, writeFile, readdir } from 'node:fs/promises'
 import { isAbsolute, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readPngMeta, isPng, loopSeconds } from './png-meta.mjs'
+import { readSvgMeta } from './svg-meta.mjs'
 import { regionRange, renderRegion, parseRegion, idFromFilename } from './region.mjs'
 
 const root = new URL('../', import.meta.url)
@@ -136,11 +137,14 @@ if (wantsClear) {
   process.exit(0)
 }
 
+/** The asset types this project inlines. Keep in step with the two validators. */
+const ASSET_EXTENSIONS = ['.png', '.svg']
+
 /** What is in `asset/` right now, ignoring the private subdirectory. */
 async function publicAssets() {
   const entries = await readdir(assetPath, { withFileTypes: true }).catch(() => [])
   return entries
-    .filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.png'))
+    .filter(entry => entry.isFile() && ASSET_EXTENSIONS.some(ext => entry.name.toLowerCase().endsWith(ext)))
     .map(entry => `asset/${entry.name}`)
     .sort()
 }
@@ -171,49 +175,36 @@ for (const typed of requested) {
   /** Fail with the file's name in front, so the message reads as one sentence. */
   const reject = (reason) => { throw new Error(`${typed}: ${reason}`) }
 
-  let png
+  let bytes
   try {
-    png = await readFile(absolute)
+    bytes = await readFile(absolute)
   } catch (error) {
     if (error.code !== 'ENOENT') throw error
     const present = await publicAssets()
     reject(`no such file. In this checkout, asset/ holds:\n  ${present.join('\n  ')}`)
   }
 
-  if (!isPng(png)) reject(`not a PNG (the 8-byte signature is missing). ${REBUILD}`)
+  // Kind is decided by content, not by extension: a .png that is really an SVG
+  // (and the reverse) is caught here instead of being validated by the wrong rules.
+  const kind = isPng(bytes) ? 'png' : looksLikeSvg(bytes) ? 'svg' : null
+  if (kind === null) {
+    reject('is neither a PNG nor an SVG (no PNG signature, and the text does not start '
+      + 'with <svg or <?xml). ' + REBUILD)
+  }
 
-  const meta = readPngMeta(png)
-  if (meta.colourType !== 3) {
-    reject(`colour type ${meta.colourType}, expected 3 (indexed colour). ${REBUILD}`)
-  }
-  if (meta.bitDepth !== 2 && meta.bitDepth !== 4) {
-    reject(`bit depth ${meta.bitDepth}, expected 2 (four alpha levels) or 4 (sixteen). ${REBUILD}`)
-  }
-  if (meta.interlace !== 0) reject('interlaced. A masked icon must not be: the mask samples one frame.')
-  if (meta.frames === undefined) {
-    reject('a still image, not an APNG. A still icon is what the host already ships.')
-  }
-  if (meta.width !== meta.height) {
-    reject(`${meta.width}x${meta.height} is not square. The icon box is square and the mask is `
-      + 'stretched to fill it (`center / 100% 100%`), so non-square art would be distorted.')
-  }
-  if (meta.width < MIN_EDGE) reject(`${meta.width}px is below the ${MIN_EDGE}px floor.`)
-  if (meta.width > MAX_EDGE) reject(`${meta.width}px is above the ${MAX_EDGE}px ceiling.`)
+  /** The per-kind checks. Each returns what the region entry needs from it. */
+  const validated = kind === 'png'
+    ? validatePng(bytes, reject, warnings, typed)
+    : validateSvg(bytes, reject, warnings, typed)
 
-  const art = png.toString('base64')
+  const art = validated.art
   if (art.length > BUDGET_ERROR) {
     reject(`inlines to ${art.length.toLocaleString()} chars of base64, over the `
-      + `${BUDGET_ERROR.toLocaleString()} ceiling. Lower the frame rate, the resolution, `
-      + 'or the alpha levels.')
+      + `${BUDGET_ERROR.toLocaleString()} ceiling. ${validated.overBudget ?? ''}`)
   }
   if (art.length > BUDGET_WARN) {
     warnings.push(`${typed}: ${art.length.toLocaleString()} chars of base64 is past the `
       + `${BUDGET_WARN.toLocaleString()} advisory; the module is parsed on every page load.`)
-  }
-  if (meta.frames < 2) warnings.push(`${typed}: ${meta.frames} frame, i.e. a still image.`)
-  if (meta.plays !== 0) {
-    warnings.push(`${typed}: plays=${meta.plays}, so the animation stops. The running indicator `
-      + 'is on screen for as long as the task runs, so a finite loop will visibly end.')
   }
 
   // --- publication guard ----------------------------------------------------
@@ -236,22 +227,133 @@ for (const typed of requested) {
       + 'or name it yourself with --id=.')
   }
 
-  const defaultSize = defaultFlag === undefined ? Math.round(meta.width / 2) : Number(defaultFlag)
+  const defaultSize = defaultFlag === undefined ? validated.recommended : Number(defaultFlag)
   if (!Number.isFinite(defaultSize)) reject(`--default=${defaultFlag} is not a number.`)
-  if (defaultSize < minSize || defaultSize > meta.width) {
-    reject(`--default=${defaultSize} is outside the legal ${minSize}..${meta.width}px range.`)
+  if (defaultSize < minSize || defaultSize > validated.edge) {
+    reject(`--default=${defaultSize} is outside the legal ${minSize}..${validated.edge}px range.`)
   }
 
   artworks.push({
     id,
-    edge: meta.width,
+    mime: validated.mime,
+    edge: validated.edge,
     defaultSize,
     art,
     typed,
-    png,
-    meta,
-    loop: loopSeconds(meta),
+    bytes,
+    describe: validated.describe,
+    loop: validated.loop,
   })
+}
+
+/**
+ * Whether the bytes read as an SVG: an XML declaration or an `<svg` start tag,
+ * optionally after a byte-order mark. Content, not extension, decides.
+ * @param bytes - the file's bytes.
+ * @returns whether the file should go through the SVG checks.
+ */
+function looksLikeSvg(bytes) {
+  const head = bytes.subarray(0, 200).toString('utf8').replace(/^\ufeff/, '')
+  return /^\s*(<\?xml|<svg[\s>])/.test(head)
+}
+
+/**
+ * Validate a PNG the way a mask consumes it: indexed colour, animated, square,
+ * within the edge bounds.
+ *
+ * @returns the region-entry fields, plus `recommended` (the size to suggest).
+ */
+function validatePng(bytes, reject, warnings, typed) {
+  const meta = readPngMeta(bytes)
+  if (meta.colourType !== 3) {
+    reject(`colour type ${meta.colourType}, expected 3 (indexed colour). ${REBUILD}`)
+  }
+  if (meta.bitDepth !== 2 && meta.bitDepth !== 4) {
+    reject(`bit depth ${meta.bitDepth}, expected 2 (four alpha levels) or 4 (sixteen). ${REBUILD}`)
+  }
+  if (meta.interlace !== 0) reject('interlaced. A masked icon must not be: the mask samples one frame.')
+  if (meta.frames === undefined) {
+    reject('a still image, not an APNG. A still icon is what the host already ships.')
+  }
+  if (meta.width !== meta.height) {
+    reject(`${meta.width}x${meta.height} is not square. The icon box is square and the mask is `
+      + 'stretched to fill it (`center / 100% 100%`), so non-square art would be distorted.')
+  }
+  if (meta.width < MIN_EDGE) reject(`${meta.width}px is below the ${MIN_EDGE}px floor.`)
+  if (meta.width > MAX_EDGE) reject(`${meta.width}px is above the ${MAX_EDGE}px ceiling.`)
+
+  if (meta.frames < 2) warnings.push(`${typed}: ${meta.frames} frame, i.e. a still image.`)
+  if (meta.plays !== 0) {
+    warnings.push(`${typed}: plays=${meta.plays}, so the animation stops. The running indicator `
+      + 'is on screen for as long as the task runs, so a finite loop will visibly end.')
+  }
+
+  return {
+    mime: 'image/png',
+    edge: meta.width,
+    // The 2x-raster rule: the artwork is drawn at twice the icon box, so half its
+    // edge is the size where nothing is resampled.
+    recommended: Math.round(meta.width / 2),
+    describe: `${meta.width}x${meta.height}, ${meta.bitDepth}bpp, ${meta.frames} frames, `
+      + `${loopSeconds(meta) === undefined ? 'no timing' : `${loopSeconds(meta).toFixed(2)}s`}, `
+      + `plays=${meta.plays}`,
+    loop: loopSeconds(meta),
+    art: bytes.toString('base64'),
+    overBudget: 'Lower the frame rate, the resolution, or the alpha levels.',
+  }
+}
+
+/**
+ * Validate an SVG the way a mask consumes it: the drawing has to animate, be
+ * self-contained, and be square — and since it is a *vector*, the slider ceiling
+ * is the status-row bound rather than the artwork's own size (upscaling a vector
+ * costs nothing, which is rather the point of allowing these).
+ *
+ * @returns the region-entry fields, plus `recommended` (the size to suggest).
+ */
+function validateSvg(bytes, reject, warnings, typed) {
+  const text = bytes.toString('utf8')
+  const svg = readSvgMeta(text)
+
+  // Reported together, not one at a time: a downloaded file often has several
+  // problems and fixing them one rejection at a time is a poor way to spend
+  // anybody's afternoon.
+  if (svg.issues.length > 0) reject(svg.issues.map(reason => `${reason}`).join(' Also, '))
+  if (svg.width === undefined || svg.height === undefined) {
+    reject('states no usable size: there is no `viewBox` and no numeric `width`/`height`, '
+      + 'so the artwork cannot be placed in a square box. ' + REBUILD)
+  }
+  if (svg.width !== svg.height) {
+    reject(`${svg.width}x${svg.height} is not square. The icon box is square and the mask is `
+      + 'stretched to fill it (`center / 100% 100%`), so non-square art would be distorted. '
+      + 'Pad the drawing out to a square viewBox.')
+  }
+  if (!svg.animated) {
+    reject('a still image — there is no SMIL animation and no CSS animation inside it. '
+      + 'A still icon is what the host already ships.')
+  }
+  if (!svg.infinite) {
+    warnings.push(`${typed}: no endless repeat is spelled out (no \`repeatCount="indefinite"\`, `
+      + 'no `infinite`). If the animation is driven by begin-chains it still loops, but check '
+      + 'it in the preview — a spinner that stops is worse than no spinner.')
+  }
+
+  const authored = Math.round(svg.width)
+  return {
+    mime: 'image/svg+xml',
+    // A vector has no upscale cliff, so the ceiling is the status-row bound
+    // rather than the artwork's own size — that is rather the point of allowing
+    // these.
+    edge: MAX_EDGE,
+    // A display size, so the floor is the host's own (MIN_SIZE), not the
+    // asset-edge floor: a 24-unit design is meant to be shown at 24px.
+    recommended: Math.min(MAX_EDGE, Math.max(minSize, authored)),
+    describe: `${svg.width}x${svg.height}, ${svg.animationKind} animation, `
+      + `${svg.infinite ? 'loops forever' : 'repeat not spelled out'}`,
+    loop: undefined,
+    art: bytes.toString('base64'),
+    overBudget: 'An SVG this large is usually hiding rasters or path noise.',
+  }
 }
 
 // --- ids are unique, and the fallback has to exist ---------------------------
@@ -281,19 +383,12 @@ const total = artworks.reduce((sum, artwork) => sum + artwork.art.length, 0)
 console.log(`embedded ${artworks.length} style(s)`)
 for (const artwork of artworks) {
   const { meta } = artwork
-  const marks = [
-    artwork.id === fallback ? 'default' : '',
-    `${meta.width}x${meta.height}`,
-    `${meta.bitDepth}bpp`,
-    `${meta.frames} frames`,
-    artwork.loop === undefined ? 'no timing' : `${artwork.loop.toFixed(2)}s`,
-    `plays=${meta.plays}`,
-  ].filter(Boolean)
+  const marks = [artwork.id === fallback ? 'default' : '', artwork.describe].filter(Boolean)
   console.log(`  ${artwork.id.padEnd(12)} ${marks.join(', ')}`)
-  console.log(`  ${' '.repeat(12)} ${artwork.png.byteLength.toLocaleString()} B -> `
+  console.log(`  ${' '.repeat(12)} ${artwork.bytes.byteLength.toLocaleString()} B -> `
     + `${artwork.art.length.toLocaleString()} chars `
     + `(${(artwork.art.length / BUDGET_WARN * 100).toFixed(0)}% of the advisory), `
-    + `icon ${artwork.defaultSize}px of ${meta.width}`)
+    + `icon ${artwork.defaultSize}px of ${artwork.edge}`)
 }
 console.log(`  ${'total'.padEnd(12)} ${total.toLocaleString()} chars of base64`
   + (total > TOTAL_WARN ? ` -- past the ${TOTAL_WARN.toLocaleString()} advisory` : ''))

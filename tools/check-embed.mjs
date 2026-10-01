@@ -144,7 +144,7 @@ try {
   section('refuses an asset it cannot vouch for')
   {
     const cases = [
-      ['not-a-png.bin', Buffer.from('this is a shell script, not a PNG\n'), 'not a PNG'],
+      ['not-a-png.bin', Buffer.from('this is a shell script, not a PNG\n'), 'neither a PNG nor an SVG'],
       ['still-palette.png', palettePng({}), 'a still image, not an APNG'],
       ['not-square.png', palettePng({ width: 96, height: 128, frames: 90 }), 'is not square'],
       ['depth-8.png', palettePng({ bitDepth: 8, frames: 90 }), 'bit depth 8'],
@@ -301,6 +301,55 @@ try {
     await embed(one)
     check('a fallback that fell out of the list is replaced by the first entry',
       (await region()).fallback === first, (await region()).fallback)
+  }
+
+  // --- 5b. SVG styles --------------------------------------------------------
+  section('accepts an animated SVG, and refuses one it cannot vouch for')
+  {
+    // A spinner built from SMIL: one shape, one rotation, endless by spelling.
+    const smil = (body, box = '0 0 24 24') =>
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${box}">${body}</svg>`
+    const spin = '<rect width="10" height="10" fill="#000">'
+      + '<animateTransform attributeName="transform" type="rotate" from="0 12 12" '
+      + 'to="360 12 12" dur="1s" repeatCount="indefinite"/></rect>'
+
+    const good = await fixture('good-spin.svg', Buffer.from(smil(spin)))
+    const result = await embed(good)
+    check('accepts a square SMIL SVG', result.code === 0,
+      `exit=${result.code} out=${result.out.slice(0, 200)}`)
+    const written = await region()
+    check('the SVG carries its own mime', written.artworks[0]?.mime === 'image/svg+xml',
+      written.artworks[0]?.mime)
+    check('the recommended size is the authored size', written.artworks[0]?.defaultSize === 24,
+      String(written.artworks[0]?.defaultSize))
+    check('the ceiling for a vector is the status-row bound',
+      written.artworks[0]?.edge === 512, String(written.artworks[0]?.edge))
+
+    const lower = await fixture('lower-viewbox.svg', Buffer.from(smil(spin).replace('viewBox', 'viewbox')))
+    const refused = await embed(lower)
+    check('refuses a lowercase viewbox — renderers ignore it',
+      refused.code !== 0 && refused.out.includes('`viewbox`'), refused.out.slice(0, 260))
+
+    const tall = await fixture('tall-spin.svg', Buffer.from(smil(spin, '0 0 24 40')))
+    const square = await embed(tall)
+    check('refuses a non-square viewBox',
+      square.code !== 0 && square.out.includes('is not square'), square.out.slice(0, 260))
+
+    const stillSvg = await fixture('still-spin.svg', Buffer.from(smil('<rect width="10" height="10"/>')))
+    const motionless = await embed(stillSvg)
+    check('refuses an SVG with no animation in it',
+      motionless.code !== 0 && motionless.out.includes('a still image'), motionless.out.slice(0, 260))
+
+    const scripted = await fixture('scripted-spin.svg', Buffer.from(smil(`${spin}<script>steal()</script>`)))
+    const code = await embed(scripted)
+    check('refuses an SVG that carries a script',
+      code.code !== 0 && code.out.includes('<script>'), code.out.slice(0, 260))
+
+    const phoning = await fixture('phoning-spin.svg',
+      Buffer.from(smil(spin.replace('<rect ', '<a href="https://example.test"><rect ').replace('</rect>', '</rect></a>'))))
+    const external = await embed(phoning)
+    check('refuses an SVG that references the outside',
+      external.code !== 0 && external.out.includes('outside the file'), external.out.slice(0, 260))
   }
 
   // --- 6. the format is one format ------------------------------------------

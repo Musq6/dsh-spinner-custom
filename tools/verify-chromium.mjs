@@ -427,8 +427,15 @@ try {
             checked: tiles.filter(tile => tile.getAttribute('aria-checked') === 'true').length,
             checkedName: (tiles.find(tile => tile.getAttribute('aria-checked') === 'true') || {})
               .getAttribute('aria-label'),
-            tileMasks: tiles.filter(tile => (getComputedStyle(tile.querySelector('.sc-mark')).maskImage || '')
-              .startsWith('url("data:image/png;base64')).length,
+            // Each tile is checked against ITS OWN --sc-art, not against one
+            // global prefix: the styles are different kinds (PNG and SVG) and a
+            // single prefix would fail exactly the tiles that are not the
+            // fallback.
+            tileMasks: tiles.filter(tile => {
+              const own = getComputedStyle(tile).getPropertyValue('--sc-art').trim()
+              const actual = (getComputedStyle(tile.querySelector('.sc-mark')).maskImage || '').trim()
+              return own !== '' && actual === own
+            }).length,
             readout: row.querySelector('.sc-readout')?.textContent ?? null,
             rangeMin: row.querySelector('input[type=range]')?.min ?? null,
             rangeMax: row.querySelector('input[type=range]')?.max ?? null,
@@ -581,7 +588,7 @@ try {
           if (report.cell.width !== `${DEFAULT_SIZE}px` || report.cell.height !== `${DEFAULT_SIZE}px`) {
             failures.push(`preview cell should be ${DEFAULT_SIZE}px, got ${report.cell.width}x${report.cell.height}`)
           }
-          if (report.cell.maskKind !== 'url("data:image/png;base64') {
+          if (report.cell.maskKind !== `url("data:${DEFAULT_ARTWORK.mime};base64`) {
             failures.push(`the preview cell is not masked with the inlined APNG: ${report.cell.maskKind}`)
           }
           if (!carriesThePayload(report.cell.maskLength)) {

@@ -54,6 +54,9 @@ const PROSE = [
   '  ARTWORKS      the styles, in the order the picker shows them',
   '  FALLBACK_ART  the id shown before anything is chosen',
   '',
+  '`mime` says how the payload becomes a data URI. A PNG and an SVG are both',
+  'opaque base64 blobs at this point, so the type has to travel with them.',
+  '',
   'An empty list is a state, not a fault: `--clear` produces it deliberately, to',
   'build a tree with no artwork in it. See the guard at the top of apply().',
   '',
@@ -72,7 +75,7 @@ const PROSE = [
  */
 export function renderRegion({ artworks, fallback }) {
   const entries = artworks.map(artwork =>
-    `${INDENT}  { id: '${artwork.id}', edge: ${artwork.edge}, `
+    `${INDENT}  { id: '${artwork.id}', mime: '${artwork.mime}', edge: ${artwork.edge}, `
     + `defaultSize: ${artwork.defaultSize}, art: '${artwork.art}' },`)
 
   const list = entries.length === 0
@@ -126,7 +129,8 @@ export function regionRange(source) {
 }
 
 /** One entry, as rendered above. Ids and base64 never contain a quote. */
-const ENTRY = /\{ id: '([^']+)', edge: (\d+), defaultSize: (\d+), art: '([^']*)' \}/g
+const ENTRY
+  = /\{ id: '([^']+)', mime: '([^']+)', edge: (\d+), defaultSize: (\d+), art: '([^']*)' \}/g
 
 /**
  * Read the region back out of a source text.
@@ -145,10 +149,11 @@ export function parseRegion(source) {
   for (const match of body.matchAll(ENTRY)) {
     artworks.push({
       id: match[1],
-      edge: Number(match[2]),
-      defaultSize: Number(match[3]),
-      art: match[4],
-      chars: match[4].length,
+      mime: match[2],
+      edge: Number(match[3]),
+      defaultSize: Number(match[4]),
+      art: match[5],
+      chars: match[5].length,
     })
   }
 
@@ -174,7 +179,7 @@ export function fallbackArtwork(region) {
 
 /** The id a file contributes, taken from its name before the `-160x160` part. */
 export function idFromFilename(name) {
-  const stem = name.replace(/^.*[\\/]/, '').replace(/\.png$/i, '')
+  const stem = name.replace(/^.*[\\/]/, '').replace(/\.(png|svg)$/i, '')
   const trimmed = stem.replace(/-\d+x\d+.*$/, '')
   return trimmed === '' ? stem : trimmed
 }

@@ -137,7 +137,7 @@ section('icon override')
     property('--spinner-custom-size') === `${FALLBACK.defaultSize}px`,
     property('--spinner-custom-size'))
   check('the selected style reaches the document as a mask',
-    property('--sc-mask') === `url("data:image/png;base64,${FALLBACK.art}")`,
+    property('--sc-mask') === `url("data:${FALLBACK.mime};base64,${FALLBACK.art}")`,
     property('--sc-mask').slice(0, 60))
   check('the override is gated on motion and forced colours',
     text.includes('@media (prefers-reduced-motion: no-preference) and (forced-colors: none)'))
@@ -197,7 +197,7 @@ section('live reactions')
   const other = region.artworks.find(artwork => artwork.id !== FALLBACK.id)
   slot.face.setSpinnerCustomArt(other.id)
   check('a style write reaches the document',
-    property('--sc-mask') === `url("data:image/png;base64,${other.art}")`,
+    property('--sc-mask') === `url("data:${other.mime};base64,${other.art}")`,
     property('--sc-mask').slice(0, 60))
   check('a style write persists', stored().art === other.id, JSON.stringify(stored()))
   check('a style write keeps the size the user chose', stored().size === wanted, JSON.stringify(stored()))
