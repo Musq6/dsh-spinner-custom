@@ -1,7 +1,7 @@
 {
   "name": "@local/spinner-custom",
   "version": "1.0.0",
-  "private": true,
+  "license": "MIT",
   "type": "module",
   "description": "Replace the running-status icon in the Harness Web UI, with a Settings -> General row for its size.",
   "exports": {
